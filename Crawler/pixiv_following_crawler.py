@@ -4,18 +4,20 @@ import queue
 import os
 import time
 import atexit
+import threading
 
 saveDir = './responses'
+MAX_RETRIES = 3
 
 visited = {}
 visitingQueque = queue.Queue()
-visitingId = ''
+
 
 def makeRequest(id):
     url='https://www.pixiv.net/ajax/user/{}/following?offset=0&limit=24&rest=show&tag=&lang=zh'.format(id)
     headers = {
         'user-agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:93.0) Gecko/20100101 Firefox/93.0',
-        'cookie': 'YOUR_COOKIE',
+        'cookie': YOUR COOKIE,
         'referer': 'https://www.pixiv.net/users/{}/following'.format(id),
     }
     proxy = '127.0.0.1:7890'
@@ -23,17 +25,26 @@ def makeRequest(id):
         'http': 'http//' + proxy,
         'https': 'https://' + proxy,
     }
-    try:
-        response = requests.get(url, headers=headers, proxies=proxies).json()
-        total = response['body']['total']
-        for i in range(24, total, 24):
-            url='https://www.pixiv.net/ajax/user/{}/following?offset={}&limit=24&rest=show&tag=&lang=zh'.format(id, i)
-            partialResponse = requests.get(url, headers=headers, proxies=proxies).json()
-            for user in partialResponse['body']['users']:
-                response['body']['users'].append(user)
-    except:
-        print('Net workerror')
-        exit()
+    for retries in range(MAX_RETRIES + 1):
+        try:
+            response = requests.get(url, headers=headers, proxies=proxies).json()
+            total = response['body']['total']
+            for i in range(24, total, 24):
+                url='https://www.pixiv.net/ajax/user/{}/following?offset={}&limit=24&rest=show&tag=&lang=zh'.format(id, i)
+                partialResponse = requests.get(url, headers=headers, proxies=proxies).json()
+                for user in partialResponse['body']['users']:
+                    response['body']['users'].append(user)
+            break
+        except:
+            if retries == 0:
+                print(threading.current_thread().name + ': Network error. Retry in 3 seconds')
+            elif retries < MAX_RETRIES:
+                print(threading.current_thread().name + ': Retry {} failed...'.format(retries+1))
+            else:
+                print(threading.current_thread().name + ' exited.')
+                visitingQueque.put(id)
+                exit()
+            time.sleep(3)
 
     visited[id] = 1
     for user in response['body']['users']:
@@ -66,22 +77,19 @@ def loadVisited():
 @atexit.register
 def saveQueue():
     with open('queue.txt', 'w') as fq:
-        fq.write(visitingId+',')
         while not visitingQueque.empty():
             fq.write(visitingQueque.get()+',')
     print('Safely exited')
 
 
-if __name__ == '__main__':
-    startId = '6662895'
-    visitingQueque.put(startId)
-    loadVisited()
-    
+   
+def crawler():
     startTime = time.time()
     epoch = 0
     while(len(visited) < 10000):
         visitingId = visitingQueque.get()
-        if (visitingId in visited) : continue
+        while (visitingId in visited) : 
+            visitingId = visitingQueque.get()
         response = makeRequest(visitingId)
         writeJSON(visitingId, response)
 
@@ -89,3 +97,17 @@ if __name__ == '__main__':
         if (epoch % 10 == 0):
             timeSpent = int(time.time() - startTime)
             print('Epoch{}: total time {}m {}s'.format(epoch, timeSpent//60, timeSpent%60))
+
+def spawnMulitiThread(thread_num):
+    threadGroup = []
+    for i in range(thread_num):
+        threadGroup.append(threading.Thread(target=crawler))
+        threadGroup[i].start()
+    print('Spawned {} threads'.format(thread_num))
+    
+    
+if __name__ == '__main__':
+    startId = '6662895'
+    visitingQueque.put(startId)
+    loadVisited()
+    spawnMulitiThread(4)
